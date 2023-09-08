@@ -50,7 +50,7 @@ abstract class SwaggerModelsGenerator extends SwaggerGeneratorBase {
       return '';
     }
 
-    if (kBasicTypes.contains(schema.type.toLowerCase())) {
+    if (kBasicSwaggerTypes.contains(schema.type.toLowerCase())) {
       return '';
     }
 
@@ -62,8 +62,12 @@ abstract class SwaggerModelsGenerator extends SwaggerGeneratorBase {
       return 'class $className {}';
     }
 
-    if (schema.type == kObject && schema.anyOf.isNotEmpty) {
-      return 'typedef $className = Map<String, dynamic>;';
+    if (schema.anyOf.isNotEmpty) {
+      if (schema.type == kObject) {
+        return 'typedef $className = Map<String, dynamic>;';
+      } else {
+        return 'typedef $className = Object;';
+      }
     }
 
     if (schema.type == 'array') {
@@ -143,6 +147,15 @@ abstract class SwaggerModelsGenerator extends SwaggerGeneratorBase {
         ...schema.items?.properties ?? {},
       };
 
+      for (var element in schema.allOf) {
+        properties.addAll(element.properties);
+
+        if (element.ref.isNotEmpty) {
+          final neededClass = classes[element.ref.getUnformattedRef()];
+          properties.addAll(neededClass?.properties ?? {});
+        }
+      }
+
       final shouldUseItemsProperties =
           schema.items?.properties.isNotEmpty == true;
 
@@ -163,9 +176,15 @@ abstract class SwaggerModelsGenerator extends SwaggerGeneratorBase {
         final items = propSchema.items;
 
         if (items != null && items.properties.isNotEmpty) {
-          result[innerClassName] = propSchema;
+          propSchema.type = 'object';
+          result['$innerClassName\$Item'] = items;
         }
       });
+
+      if (schema.items != null) {
+        result.addAll(getClassesFromInnerClasses(
+            {'${getValidatedClassName(classKey)}\$item': schema.items!}));
+      }
     });
 
     if (result.isNotEmpty) {
@@ -236,7 +255,9 @@ abstract class SwaggerModelsGenerator extends SwaggerGeneratorBase {
     required bool generateEnumsMethods,
   }) {
     final allEnumsString = generateEnumsMethods
-        ? allEnums.map((e) => e.generateFromJsonToJson()).join()
+        ? allEnums
+            .map((e) => e.generateFromJsonToJson(options.enumsCaseSensitive))
+            .join()
         : '';
 
     final allEnumListNames = getAllListEnumNames(root);
@@ -333,6 +354,10 @@ abstract class SwaggerModelsGenerator extends SwaggerGeneratorBase {
 
     if (parameter.properties.isNotEmpty) {
       return '${getValidatedClassName(className)}\$${getValidatedClassName(parameterName)}$modelPostfix';
+    }
+
+    if (parameter.items?.properties.isNotEmpty == true) {
+      return 'List<${getValidatedClassName(className)}\$${getValidatedClassName(parameterName)}\$Item$modelPostfix>';
     }
 
     if (parameter.hasRef) {
@@ -612,7 +637,11 @@ static $returnType $fromJsonFunction($valueType? value) => $enumNameCamelCase$fr
     final allOf = prop.allOf;
     String typeName;
 
-    if (allOf.length != 1) {
+    if (allOf
+            .where((element) =>
+                element.ref.isNotEmpty || element.properties.isNotEmpty)
+            .length >
+        1) {
       typeName = kDynamic;
     } else {
       var className = allOf.first.ref.getRef();
@@ -662,9 +691,9 @@ static $returnType $fromJsonFunction($valueType? value) => $enumNameCamelCase$fr
     final parameterName = prop.ref.split('/').last;
 
     String typeName;
-    final refSchema = allClasses[parameterName];
+    final refSchema = allClasses[getValidatedClassName(parameterName)];
     if (kBasicSwaggerTypes.contains(refSchema?.type) &&
-        allClasses[parameterName]?.isEnum != true) {
+        allClasses[getValidatedClassName(parameterName)]?.isEnum != true) {
       if (refSchema?.format == 'datetime') {
         typeName = 'DateTime';
       } else {
@@ -1057,7 +1086,12 @@ static $returnType $fromJsonFunction($valueType? value) => $enumNameCamelCase$fr
 
       final basicTypesMap = generateBasicTypesMapFromSchemas(root);
 
-      propertyName = getValidatedClassName(propertyName).asParameterName();
+
+      propertyName = getValidatedParameterName(propertyName).asParameterName();
+
+      if (propertyName.isEmpty) {
+        propertyName = '\$';
+      }
 
       propertyName = getParameterName(propertyName, propertyNames);
 
@@ -1211,7 +1245,7 @@ static $returnType $fromJsonFunction($valueType? value) => $enumNameCamelCase$fr
     entityMap.forEach((key, value) {
       var fieldName = generateFieldName(
         getParameterName(
-            getValidatedClassName(key).asParameterName(), propertyNames),
+            getValidatedParameterName(key).asParameterName(), propertyNames),
       );
 
       propertyNames.add(fieldName);

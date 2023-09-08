@@ -88,8 +88,20 @@ class SwaggerRequestsGenerator extends SwaggerGeneratorBase {
         ..optionalParameters.add(Parameter(
           (p) => p
             ..named = true
+            ..type = Reference('http.Client?')
+            ..name = 'httpClient',
+        ))
+        ..optionalParameters.add(Parameter(
+          (p) => p
+            ..named = true
             ..type = Reference('Authenticator?')
             ..name = 'authenticator',
+        ))
+        ..optionalParameters.add(Parameter(
+          (p) => p
+            ..named = true
+            ..type = Reference('Converter?')
+            ..name = 'converter',
         ))
         ..optionalParameters.add(Parameter(
           (p) => p
@@ -131,6 +143,10 @@ class SwaggerRequestsGenerator extends SwaggerGeneratorBase {
           return;
         }
 
+        if (options.addBasePathToRequests) {
+          path = '${swaggerRoot.basePath}$path';
+        }
+
         final methodName = _getRequestMethodName(
           requestType: requestType,
           swaggerRequest: swaggerRequest,
@@ -167,7 +183,10 @@ class SwaggerRequestsGenerator extends SwaggerGeneratorBase {
 
           returns = '${options.customReturnType}<$innerResponseType>';
         } else {
-          returns = returnTypeName.isEmpty ? kFutureResponse : returnTypeName.asFutureResponse();
+
+          returns = returnTypeName.isEmpty
+              ? kFutureResponse
+              : returnTypeName.asFutureResponse();
         }
 
         final hasOptionalBody =
@@ -544,10 +563,9 @@ class SwaggerRequestsGenerator extends SwaggerGeneratorBase {
   }) {
     final format = parameter.schema?.format ?? '';
 
-    if (parameter.inParameter == kHeader) {
-      return _mapParameterName(kString, format, '');
-    } else if (parameter.items?.enumValues.isNotEmpty == true ||
-        parameter.schema?.enumValues.isNotEmpty == true) {
+    if (parameter.items?.enumValues.isNotEmpty == true ||
+        parameter.schema?.enumValues.isNotEmpty == true ||
+        parameter.enumValues.isNotEmpty) {
       if (definedParameters.containsValue(parameter)) {
         return getValidatedClassName(parameter.name).asEnum();
       }
@@ -743,8 +761,21 @@ class SwaggerRequestsGenerator extends SwaggerGeneratorBase {
 
         // otherwise no request scheme is defined, we provide every param as a separate param.
         schema?.properties.forEach((key, value) {
-          if (value.type == 'string' && value.format == 'binary') {
-            final isRequired = schema!.required.contains(key);
+          isBinary(SwaggerSchema? value) =>
+              (value?.type == 'string' && value?.format == 'binary') ||
+              value?.type == 'file';
+          if ((isBinary(value) ||
+              value.type == 'array' && isBinary(value.items))) {
+            final isRequired =
+                value.type == 'array' || schema!.required.contains(key);
+            String typeRef = isRequired
+                ? options.multipartFileType
+                : options.multipartFileType.makeNullable();
+
+            if (value.type == 'array') {
+              typeRef = 'List<$typeRef>';
+            }
+
             result.add(
               Parameter(
                 (p) => p
@@ -1223,8 +1254,8 @@ class SwaggerRequestsGenerator extends SwaggerGeneratorBase {
         : 'baseUrl: baseUrl';
 
     final converterString = options.withConverter
-        ? 'converter: \$JsonSerializableConverter(),'
-        : 'converter: chopper.JsonConverter(),';
+        ? 'converter: converter ?? \$JsonSerializableConverter(),'
+        : 'converter: converter ?? chopper.JsonConverter(),';
 
     final chopperClientBody = '''
     if(client!=null){
@@ -1235,6 +1266,7 @@ class SwaggerRequestsGenerator extends SwaggerGeneratorBase {
       services: [_\$$className()],
       $converterString
       interceptors: interceptors ?? [],
+      client: httpClient,
       authenticator: authenticator,
       $baseUrlString);
     return _\$$className(newClient);
